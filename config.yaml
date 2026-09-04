@@ -1,0 +1,98 @@
+# video-digest — non-secret configuration.
+# Secrets belong in .env / environment only (see .env.example).
+# Env vars override these values: VIDEODIGEST_<SECTION>__<KEY> (double
+# underscore nests), e.g. VIDEODIGEST_ACQUISITION__MAX_DURATION_MINUTES=120.
+#
+# Two YAML traps this file has to keep clear of (podcast-digest and vault-ask
+# both hit them): `**/*.md`-style globs need quoting, and PyYAML is YAML 1.1,
+# so a bare `no`/`yes`/`off`/`on` parses as a boolean, not a string.
+
+vault:
+  # The vault's own CouchDB — the same one Self-hosted LiveSync replicates
+  # against. Deployment topology, so left null here; set via
+  # VIDEODIGEST_VAULT__COUCHDB_URL. A placeholder keeps this file bootable for
+  # tests and dry runs that never touch the vault.
+  couchdb_url: null
+  db: tastings
+  user: videodigest
+  notes_dir: "13 video-summaries"
+  transcripts_dir: "14 video-transcripts"
+  topics_dir: "99 topics"
+  # Inbox watcher's queue note. Inside the notes folder; the "_" prefix
+  # sorts it to the top in Obsidian.
+  inbox_note: "13 video-summaries/_video-queue.md"
+  topic_creation_threshold: 2
+  timeout_s: 30
+
+acquisition:
+  max_duration_minutes: 240
+  subtitle_languages: [en]
+  cookies_file: null
+  rate_limit_per_hour: 20
+  playlist_expansion_cap: 25
+
+transcription:
+  # The existing speaches container in ~/projects/asr-server, on the Mac.
+  # Deployment topology — set via VIDEODIGEST_TRANSCRIPTION__REMOTE_URL.
+  remote_url: "http://your-mac.example.local:8000"
+  model: distil-large-v3
+  accuracy_model: large-v3
+  vad_filter: true
+  asr_poll_interval_minutes: 5
+  asr_stale_hours: 48
+  degrade_to_captions_when_offline: true
+  max_concurrent_asr: 1
+  remote_timeout_s: 2700
+
+llm:
+  tiers:
+    # Both tiers on OpenRouter. Pass A (map) was local Ollama, but a dense or
+    # long transcript's first chunk reliably blew the 120s tier timeout or
+    # truncated the model's output — and with no fallback that failed the
+    # whole tier, deferring the video forever. A cheap cloud model for the
+    # volume pass, a stronger one for the single reduce call.
+    map:
+      primary:
+        provider: openrouter
+        model: google/gemini-2.5-flash
+      fallbacks:
+        - provider: openrouter
+          model: anthropic/claude-haiku-4.5
+      allow_cloud_fallback: true
+    reduce:
+      primary:
+        provider: openrouter
+        model: anthropic/claude-haiku-4.5
+      fallbacks:
+        - provider: openrouter
+          model: google/gemini-2.5-flash
+      allow_cloud_fallback: true
+
+# Parsed and validated, deliberately unused in v1 — see plan §Part 3 / M1.
+watchlist: []
+
+scheduler:
+  timezone: Europe/Stockholm
+  cleanup_cron: "0 * * * *"
+  inbox_poll_cron: "*/5 * * * *"
+  # How often pipeline/runner.py advances queued jobs (seconds).
+  job_poll_seconds: 20
+
+api:
+  host: "0.0.0.0"
+  port: 8090
+
+logging:
+  level: INFO
+  format: json
+
+output:
+  db_path: /data/video_digest.sqlite
+  work_dir: /data/work
+  keep_audio: false
+  orphan_media_hours: 24
+
+notifications:
+  enabled: false
+  ntfy_url: null
+  topic: null

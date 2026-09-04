@@ -1,0 +1,23 @@
+# Local deploy config (real NAS host/IPs — see deploy.env.example)
+.deploy.env*
+deploy-out/
+
+# Secrets
+.env
+!.env.example
+
+# Runtime state (SQLite app state, work dir — see video_digest.db)
+data/
+
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+uv.lock.tmp
+
+# Local tool/editor state, not project source
+.pilot/
+.DS_Store
+.claude/settings.local.json

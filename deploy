@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# Deploy video-digest to the NAS. Run it on the Mac.
+#
+#   ./deploy            build, ship, bring it up
+#   ./deploy ship       build and ship only — nothing restarted
+#   ./deploy apply      bring it up from what is already on the NAS
+#   ./deploy render     write deploy-out/docker-compose.nas.yml and stop
+#   ./deploy check      is it running, and reachable over the LAN
+#   ./deploy logs       follow the container's log
+#
+# See homelab/README.md for the verb contract the sibling projects share.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+. ./deploy.lib.sh
+nas_load_env "$PWD" "/share/Container/video-digest"
+
+LIFECYCLE=compose
+TAG="video-digest:0.1.0"
+NAS_COMPOSE="docker-compose.nas.yml"
+RENDERED="deploy-out/docker-compose.nas.yml"
+
+# This container's own qnet address — the iOS Shortcut and curl reach it here.
+APP_LAN_IP="${APP_LAN_IP:-10.0.0.2}"
+# The vault's own CouchDB — the same one Self-hosted LiveSync replicates
+# against (obsidian-vault-writer skill).
+VAULT_LAN_IP="${VAULT_LAN_IP:?Set VAULT_LAN_IP in .deploy.env — the vault CouchDB address}"
+# The Mac running the ASR worker (~/projects/asr-server's speaches
+# container). transcription.backend is always remote (plan §1.4) — there is
+# no local fallback to fall back to.
+ASR_HOST="${ASR_HOST:?Set ASR_HOST in .deploy.env — the machine running ~/projects/asr-server}"
+# Container Station generates this name per NAS, so the real one is
+# machine-specific and lives in .deploy.env. Find yours with
+#   docker network ls | grep qnet
+QNET="${QNET:-qnet-static-eth1-000000}"
+
+do_render() {
+  nas_render "$NAS_COMPOSE" "$RENDERED" \
+    "s#APP_LAN_IP_PLACEHOLDER#${APP_LAN_IP}#" \
+    "s#APP_MAC_PLACEHOLDER#$(nas_mac_for_ip "${APP_LAN_IP}")#" \
+    "s#QNET_PLACEHOLDER#${QNET}#"
+}
+
+do_ship() {
+  nas_require_reachable
+  nas_ship_image "$TAG" "$PWD"
+
+  echo "== shipping the compose definitions and config =="
+  # Both files go up, under their own names — apply runs them together with
+  # -f docker-compose.yml -f docker-compose.nas.yml, same as every sibling.
+  nas_put docker-compose.yml "${NAS_APP_DIR}/docker-compose.yml"
+  do_render
+  nas_put "$RENDERED" "${NAS_APP_DIR}/docker-compose.nas.yml"
+  nas_put config.yaml "${NAS_APP_DIR}/config.yaml"
+
+  # /data must exist and be writable by the deploy account before first run
+  # (docker-compose.nas.yml's user: override), or the app cannot create its
+  # SQLite db or work_dir on first boot.
+  nas_ssh "mkdir -p '${NAS_APP_DIR}/data' && chmod 755 '${NAS_APP_DIR}/data'"
+
+  ship_secrets
+}
+
+# The credentials the container needs, pushed from the local .env — rotate the
+# key locally and the next ship carries it, same reasoning as vault-ask.
+ship_secrets() {
+  [ -f .env ] || die ".env is missing — it holds VIDEODIGEST_ADMIN_API_KEY, " \
+    "VIDEODIGEST_VAULT_COUCHDB_PASSWORD and the LLM provider key(s)."
+  local tmp
+  tmp="$(mktemp -t video-digest-env)"
+  # shellcheck disable=SC2064
+  trap "rm -f '${tmp}'" EXIT
+  {
+    grep -E '^VIDEODIGEST_ADMIN_API_KEY=' .env || true
+    # docker-compose.yml interpolates ${VAULT_COUCHDB_PASSWORD} (the short
+    # name, like the URL/ASR vars below) — translate from the local .env's
+    # VIDEODIGEST_-prefixed name the app itself uses.
+    grep -E '^VIDEODIGEST_VAULT_COUCHDB_PASSWORD=' .env \
+      | sed 's/^VIDEODIGEST_VAULT_COUCHDB_PASSWORD=/VAULT_COUCHDB_PASSWORD=/' || true
+    grep -E '^VIDEODIGEST_OPENROUTER_API_KEY=' .env || true
+    grep -E '^VIDEODIGEST_ANTHROPIC_API_KEY=' .env || true
+    grep -E '^VIDEODIGEST_NTFY_TOKEN=' .env || true
+    echo "VAULT_COUCHDB_URL=http://${VAULT_LAN_IP}:5984"
+    echo "ASR_REMOTE_URL=http://${ASR_HOST}:8000"
+  } > "$tmp"
+
+  echo "== shipping secrets and deployment topology =="
+  nas_put "$tmp" "${NAS_APP_DIR}/.env" 600
+  echo "  ✓ shipped, mode 600"
+  rm -f "$tmp"
+}
+
+do_apply() {
+  nas_require_reachable
+  nas_compose_up docker-compose.yml docker-compose.nas.yml
+  echo
+  # "Up (healthy)" is not "reachable" — probe from here, over the network a
+  # user actually arrives on. Generous retry count: this NAS shares load with
+  # a dozen other containers and a cold recreate has measured minutes, not
+  # seconds (homelab/README.md "A slow start on this NAS looks exactly like a
+  # hang").
+  nas_wait_reachable "video-digest" "http://${APP_LAN_IP}:8090" "/healthz" "2.." 36 \
+    || die "Deployed, but the API is not reachable over the LAN — see above."
+  echo
+  echo "done."
+  echo "  API: http://${APP_LAN_IP}:8090"
+  echo "Logs:  ./deploy logs"
+  echo
+  echo "Note: the NAS host itself cannot reach this address (macvlan); check"
+  echo "from another machine on the LAN or VPN."
+}
+
+do_check() {
+  nas_require_reachable
+  nas_ssh "cd '${NAS_APP_DIR}' && ${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' compose -f docker-compose.yml -f docker-compose.nas.yml ps --format 'table {{.Name}}\t{{.Status}}'"
+  echo
+  echo "══ reachability ═════════════════════════════════════════════"
+  nas_probe "video-digest" "http://${APP_LAN_IP}:8090" "/healthz" || {
+    echo "  ↳ Expected if you're off the LAN/VPN. The NAS host cannot reach its"
+    echo "    own macvlan children either — probe from another machine, not ssh."
+  }
+  echo
+  echo "══ recent log ═══════════════════════════════════════════════"
+  nas_ssh "${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' logs --tail 20 video-digest 2>&1" || true
+}
+
+do_logs() {
+  nas_require_reachable
+  nas_ssh -t "${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' logs -f --tail 40 video-digest"
+}
+
+usage() {
+  cat >&2 <<'USAGE'
+Usage: ./deploy [verb] [--no-apply]
+
+  (none)   ship, then bring it up — the everyday command
+  ship     build the image, ship it and the compose/config files; nothing restarted
+  apply    bring it up from what is already on the NAS
+  render   write deploy-out/docker-compose.nas.yml and stop
+  check    what is running, and whether it's reachable over the LAN
+  logs     follow the container's log
+
+  --no-apply   stop after ship
+
+Real values live in the git-ignored .deploy.env — see deploy.env.example.
+USAGE
+  exit 1
+}
+
+VERB=""
+while [ $# -gt 0 ]; do
+  if nas_global_flag "$1"; then :
+  elif [ -z "$VERB" ]; then VERB="$1"
+  else echo "Unexpected argument: $1" >&2; exit 2
+  fi
+  shift
+done
+
+case "${VERB:-up}" in
+  ship)   do_ship ;;
+  apply)  do_apply ;;
+  render) do_render ;;
+  check)  do_check ;;
+  logs)   do_logs ;;
+  up)     do_ship
+          if $NO_APPLY; then echo; echo "--no-apply: shipped, nothing restarted."; else do_apply; fi ;;
+  help|-h|--help) usage ;;
+  *) echo "✗ Unknown verb: ${VERB}" >&2; usage ;;
+esac

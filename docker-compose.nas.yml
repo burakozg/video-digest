@@ -1,0 +1,71 @@
+# NAS-specific overrides for a QNAP running Container Station.
+#
+# Used with BOTH files, in this order — the base file alone stays the
+# portable deployment and must keep working unchanged:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.nas.yml up -d
+#
+# ./deploy does that for you. Everything here exists because of something
+# specific about this NAS — see homelab/README.md for the evidence behind
+# each one.
+#
+# 1. BIND MOUNT instead of the named volume. Named volumes live under
+#    Container Station's internal storage, invisible to QNAP's folder-based
+#    backup jobs. Bound under the app directory, this service's whole state
+#    (SQLite db, work dir) sits in one folder tree those jobs can capture.
+#
+# 2. `user:` set to the SSH deploy account. The image runs as uid 1000 with a
+#    read-only root filesystem and no capabilities, so it cannot chown
+#    anything Docker creates as root:root on first bind-mount. Running as the
+#    account that owns the directory sidesteps that without needing sudo.
+#
+# 3. A LAN IP on Container Station's qnet, so the iOS Shortcut and the vault
+#    inbox watcher (once M6 lands) reach the console directly rather than
+#    through a NAS-published port. MAC pinned per network (not on the
+#    service — see homelab/README.md "Pin MAC addresses"): Docker randomises
+#    the macvlan MAC on every `create`, and an unpinned recreate is
+#    unreachable inbound for minutes while it looks perfectly healthy.
+#
+# 4. Memory. This NAS runs ~7.8 GB total with a few hundred MB genuinely
+#    free alongside a dozen other containers. video-digest itself is thin —
+#    yt-dlp and httpx, no ML runtime in-process, ASR and heavy LLM work both
+#    happen elsewhere over HTTP (transcription.remote_url, llm.tiers) — so the
+#    cap is set to protect the rest of the box, not because this needs it.
+
+services:
+  video-digest:
+    user: "1002:100"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+
+    volumes:
+      - /share/Container/video-digest/data:/data
+
+    environment:
+      TZ: Europe/Stockholm
+      # NAS deployment topology (obsidian-vault-writer skill / homelab
+      # README): the shared vault CouchDB is reached as the `admin` account,
+      # not the per-app placeholder config.yaml ships. Env wins over
+      # config.yaml (config.py precedence), so the tracked file keeps its
+      # harmless default.
+      VIDEODIGEST_VAULT__USER: admin
+
+    networks:
+      QNET_PLACEHOLDER:
+        ipv4_address: APP_LAN_IP_PLACEHOLDER
+        # Pinned PER NETWORK, not on the service — a service-level mac_address:
+        # applies to only one interface and would land on the wrong one on a
+        # multi-network service (homelab/README.md "Pin MAC addresses").
+        mac_address: APP_MAC_PLACEHOLDER
+
+    # The base file's "8090:8090" publish stays alongside this qnet address —
+    # same as podcast-agent's own nas overlay (docker-compose.nas.yml there):
+    # redundant but harmless, and one less thing to diverge from the pattern.
+
+networks:
+  QNET_PLACEHOLDER:
+    external: true
