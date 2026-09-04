@@ -281,11 +281,35 @@ nas_mirror_tree() {
 # tar on either end. The verification afterwards is not paranoia: `docker load`
 # failing mid-stream still exits 0 often enough that trusting it is how you end
 # up debugging the wrong thing for an hour.
+# nas_build_labels <repo-dir> — OCI labels stamping what source built the image.
+#
+# Printed unquoted into a `docker build` line, so every value is a single token
+# with no spaces. Without these there is no way to tell what is running: the
+# image tags here are static (`podcast-agent:1.0.0`), so the tag identifies the
+# project and nothing else, and "is the NAS running my current code?" can only
+# be guessed at from timestamps.
+#
+# A dirty tree is recorded as `<sha>-dirty` rather than being cleaned up or
+# refused. Shipping uncommitted work is normal here; silently labelling it with
+# the last commit's sha would be the actual lie.
+#
+# Not fatal outside a git repo — one project builds from a directory that is not
+# one, and a missing label is reported honestly downstream as "unknown".
+nas_build_labels() {
+  local ctx="$1" sha=""
+  sha="$(git -C "$ctx" rev-parse HEAD 2>/dev/null)" || return 0
+  [ -n "$sha" ] || return 0
+  git -C "$ctx" diff --quiet HEAD 2>/dev/null || sha="${sha}-dirty"
+  printf -- '--label org.opencontainers.image.revision=%s ' "$sha"
+  printf -- '--label org.opencontainers.image.created=%s ' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+
 nas_ship_image() {
   local tag="$1" ctx="$2"
   echo "== building ${tag} for ${NAS_PLATFORM} =="
   docker info >/dev/null 2>&1 || die "Docker isn't running. Start Docker Desktop."
-  docker buildx build --platform "$NAS_PLATFORM" -t "$tag" --load "$ctx"
+  docker buildx build --platform "$NAS_PLATFORM" -t "$tag" --load \
+    $(nas_build_labels "$ctx") "$ctx"
 
   echo "== streaming into 'docker load' on ${NAS_SSH} =="
   docker save "$tag" | gzip | nas_ssh "gunzip -c | '${NAS_DOCKER_BIN}' load"
@@ -301,9 +325,12 @@ nas_ship_image() {
 # there with whatever architecture its Docker daemon actually is. No --platform,
 # no QEMU emulation — faster and more reliable for a pure-interpreter image.
 nas_build_image_remote() {
-  local tag="$1" dir="$2"
+  local tag="$1" dir="$2" labels=""
   echo "== building ${tag} natively on ${NAS_SSH} =="
-  nas_ssh "mkdir -p ${NAS_DOCKER_CONFIG} && cd '${dir}' && ${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' build -t '${tag}' ." \
+  # Labels come from the repo *here* — the NAS has the source but no git — so
+  # they are resolved locally and passed through. See nas_build_labels.
+  labels="$(nas_build_labels "$PWD")"
+  nas_ssh "mkdir -p ${NAS_DOCKER_CONFIG} && cd '${dir}' && ${NAS_DOCKER_ENV} '${NAS_DOCKER_BIN}' build ${labels} -t '${tag}' ." \
     || die "Native build of ${tag} failed on the NAS."
   nas_ssh "'${NAS_DOCKER_BIN}' image inspect '${tag}' --format 'built: {{.Id}} ({{.Architecture}})'"
 }
