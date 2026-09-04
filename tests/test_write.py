@@ -32,7 +32,7 @@ from video_digest.vault.notes import yaml_flow_list
 from video_digest.vault.render import render_digest_note, render_transcript_note
 
 COUCH = "http://vault-couch.lan:5984"
-DB = "tastings"
+DB = "the_brain"
 VID = "dQw4w9WgXcQ"
 ROW_ID = f"youtube:{VID}"
 

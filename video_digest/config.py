@@ -72,7 +72,7 @@ class VaultConfig(StrictModel):
     """
 
     couchdb_url: str | None = None
-    db: str = Field(default="tastings", pattern=r"^[a-z][a-z0-9_$()+/-]*$")
+    db: str = Field(default="the_brain", pattern=r"^[a-z][a-z0-9_$()+/-]*$")
     user: str = "videodigest"
     notes_dir: str = "13 video-summaries"
     transcripts_dir: str = "14 video-transcripts"

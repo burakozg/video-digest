@@ -13,7 +13,7 @@ vault:
   # VIDEODIGEST_VAULT__COUCHDB_URL. A placeholder keeps this file bootable for
   # tests and dry runs that never touch the vault.
   couchdb_url: null
-  db: tastings
+  db: the_brain
   user: videodigest
   notes_dir: "13 video-summaries"
   transcripts_dir: "14 video-transcripts"

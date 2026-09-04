@@ -18,7 +18,7 @@ from video_digest.config import VaultConfig
 from video_digest.vault.livesync import LiveSyncVault
 
 COUCH = "http://vault-couch.lan:5984"
-DB = "tastings"
+DB = "the_brain"
 
 
 def _cfg(**overrides: object) -> VaultConfig:
