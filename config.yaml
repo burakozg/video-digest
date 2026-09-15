@@ -57,12 +57,12 @@ llm:
         model: google/gemini-2.5-flash
       fallbacks:
         - provider: openrouter
-          model: anthropic/claude-haiku-4.5
+          model: qwen/qwen3.7-flash
       allow_cloud_fallback: true
     reduce:
       primary:
         provider: openrouter
-        model: anthropic/claude-haiku-4.5
+        model: qwen/qwen3.8-27b
       fallbacks:
         - provider: openrouter
           model: google/gemini-2.5-flash

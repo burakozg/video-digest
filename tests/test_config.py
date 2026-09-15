@@ -75,7 +75,7 @@ class TestLLMTiers:
             "tiers": {
                 "map": {"primary": {"provider": "ollama", "model": "x"}},
                 "reduce": {
-                    "primary": {"provider": "openrouter", "model": "anthropic/claude-haiku-4.5"},
+                    "primary": {"provider": "openrouter", "model": "qwen/qwen3.8-27b"},
                 },
             }
         }
@@ -87,7 +87,7 @@ class TestLLMTiers:
             "tiers": {
                 "map": {"primary": {"provider": "ollama", "model": "x"}},
                 "reduce": {
-                    "primary": {"provider": "openrouter", "model": "anthropic/claude-haiku-4.5"},
+                    "primary": {"provider": "openrouter", "model": "qwen/qwen3.8-27b"},
                 },
             }
         }
@@ -103,7 +103,7 @@ class TestLLMTiers:
                 "reduce": {
                     "primary": {
                         "provider": "openrouter",
-                        "model": "anthropic/claude-haiku-4.5",
+                        "model": "qwen/qwen3.8-27b",
                     },
                     "allow_cloud_fallback": False,
                 },

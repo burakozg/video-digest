@@ -46,7 +46,7 @@ class TestDigestNoteFrontmatter:
             tier="T1",
             transcript_tier_degraded=False,
             asr_model=None,
-            summary_model="openrouter/anthropic/claude-haiku-4.5",
+            summary_model="openrouter/qwen/qwen3.8-27b",
             vault_path="13 video-summaries/2026-08-20-a-video-about-ollama.md",
             transcript_vault_path="14 video-transcripts/2026-08-20-a-video-about-ollama.md",
             topic_links={},

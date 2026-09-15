@@ -30,11 +30,10 @@ DEFAULT_CONFIG_FILE = "config.yaml"
 class Provider(StrEnum):
     OLLAMA = "ollama"
     OPENROUTER = "openrouter"
-    ANTHROPIC = "anthropic"
 
 
 #: Providers that send content off the LAN. Gated by ``allow_cloud_fallback``.
-CLOUD_PROVIDERS: frozenset[Provider] = frozenset({Provider.OPENROUTER, Provider.ANTHROPIC})
+CLOUD_PROVIDERS: frozenset[Provider] = frozenset({Provider.OPENROUTER})
 
 #: litellm route prefix per provider — ``ollama_chat`` (not ``ollama``) because
 #: the pipeline always sends chat messages and relies on JSON-mode structured
@@ -42,7 +41,6 @@ CLOUD_PROVIDERS: frozenset[Provider] = frozenset({Provider.OPENROUTER, Provider.
 LITELLM_PREFIX: dict[Provider, str] = {
     Provider.OLLAMA: "ollama_chat",
     Provider.OPENROUTER: "openrouter",
-    Provider.ANTHROPIC: "anthropic",
 }
 
 DEFAULT_OLLAMA_BASE = "http://localhost:11434"
@@ -372,7 +370,6 @@ class Settings(BaseSettings):
     ntfy_token: SecretStr | None = None
     vault_couchdb_password: SecretStr | None = None
     openrouter_api_key: SecretStr | None = None
-    anthropic_api_key: SecretStr | None = None
 
     @classmethod
     def settings_customise_sources(
@@ -416,11 +413,6 @@ class Settings(BaseSettings):
                 "an openrouter endpoint is active but VIDEODIGEST_OPENROUTER_API_KEY is "
                 "unset (set the key, or set allow_cloud_fallback: false for that tier)"
             )
-        if Provider.ANTHROPIC in needed and not self.anthropic_api_key:
-            raise ValueError(
-                "an anthropic endpoint is active but VIDEODIGEST_ANTHROPIC_API_KEY is "
-                "unset (set the key, or set allow_cloud_fallback: false for that tier)"
-            )
         return self
 
     def vault_password(self) -> str | None:
@@ -440,9 +432,6 @@ class Settings(BaseSettings):
         match provider:
             case Provider.OPENROUTER:
                 key = self.openrouter_api_key
-                return key.get_secret_value() if key else None
-            case Provider.ANTHROPIC:
-                key = self.anthropic_api_key
                 return key.get_secret_value() if key else None
             case _:
                 return None
