@@ -14,7 +14,10 @@ until a note lands in the vault, resuming from the first unfinished stage on
 a retry. Caption-free videos park until the ASR worker is next awake; a
 failed job writes nothing and (when `notifications.enabled`) alerts. A
 scheduled watcher turns bare URLs dropped into `13 video-summaries/_video-queue.md`
-into jobs and rewrites each line as a wikilink once its note exists.
+into jobs, and once a note exists moves the line out to
+`13 video-summaries/_video-completed.md` as a wikilink rather than rewriting
+it in place — the queue holds only what's new, still running, or failed, and
+is empty the rest of the time.
 `GET /jobs/{id}` reports stage progress, `POST /videos/{id}/rewrite`
 re-renders from the stored digest, `GET /videos` exports finished summaries
 (see below), and `GET /metrics` gives tier / spend totals. Still to do: the iOS Shortcut itself (client-side) and the watchlist

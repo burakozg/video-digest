@@ -78,8 +78,14 @@ class VaultConfig(StrictModel):
     #: The inbox watcher's queue note (design §4.3). Kept inside the notes
     #: folder rather than a separate `00 inbox/`; the `_` prefix pins it to
     #: the top of the folder in Obsidian's default name sort, above every
-    #: dated digest note.
+    #: dated digest note. Empty by default: a line lives here only while it is
+    #: new, still running, or failed — see `completed_note`.
     inbox_note: str = "13 video-summaries/_video-queue.md"
+    #: Where a line goes once its note exists. A separate note rather than
+    #: rewriting in place, so the queue actually empties instead of
+    #: accumulating every video ever finished — the inbox note was 40 lines
+    #: deep and 29 of them were done before this existed.
+    completed_note: str = "13 video-summaries/_video-completed.md"
     #: Videos a topic must appear in before a new topic page is created.
     #: Reuses clippings-topics' matcher and threshold logic (canonical()).
     topic_creation_threshold: int = Field(default=2, ge=1, le=100)

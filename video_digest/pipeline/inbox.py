@@ -4,9 +4,16 @@ Polls one note in the notes folder — `vault.inbox_note`, by default
 `13 video-summaries/_video-queue.md` (the `_` prefix pins it to the top of
 the folder in Obsidian's default name sort, above every
 `<YYYY-MM-DD>-<slug>` digest note). Any line carrying a bare video URL that
-is not yet a wikilink is enqueued (`origin='inbox'`), and once the runner has
-written the note the line is rewritten in place as a wikilink to it.
-Everything the human typed that is not a URL line is left untouched.
+is not yet a wikilink is enqueued (`origin='inbox'`). Everything the human
+typed that is not a URL line, or a URL still new/running/failed, is left in
+place untouched.
+
+A line that resolves to a finished note is *removed* from the queue and
+appended to `vault.completed_note` instead of being rewritten in place — the
+queue is meant to hold only what still needs attention, empty by default. A
+line that is already a wikilink when polled (an older note written before
+this split existed, or the human's own link) migrates out the same way, on
+whichever poll first sees it.
 
 Enqueue is idempotent: a URL that resolves to a known video dedupes in
 `resolve.py` with no network call, so re-processing an already-queued line
@@ -29,7 +36,12 @@ from .resolve import enqueue
 log = get_logger(__name__)
 
 _URL = re.compile(r"https?://[^\s<>()\[\]]+")
-_WIKILINK = re.compile(r"\[\[[^\]]+\]\]")
+#: Greedy, not `[^\]]+`: a queue line holds at most one video, so `[[` to the
+#: *last* `]]` on the line is that line's whole wikilink. A video title can
+#: itself contain a bracket pair -- "... | [un]prompted 2026]]" is a real
+#: alias in this vault -- and `[^\]]+` stops at that inner `]`, so the line
+#: never matches at all and the video it names never leaves the queue.
+_WIKILINK = re.compile(r"\[\[.*\]\]")
 #: Leading whitespace plus an optional markdown bullet — preserved when a
 #: line is rewritten so a checklist stays a checklist.
 _PREFIX = re.compile(r"^(\s*(?:[-*]\s+)?)")
@@ -41,73 +53,95 @@ async def poll_inbox(
     acquisition_cfg: AcquisitionConfig,
     vault_cfg: VaultConfig,
 ) -> int:
-    """Enqueue new URLs in the inbox note and upgrade finished ones to
-    wikilinks. Returns the number of lines changed. A missing note, or a
-    vault that will not answer, is a no-op (returns 0), not an error.
+    """Enqueue new URLs in the inbox note and move finished ones out to the
+    completed note. Returns the number of lines changed. A missing inbox
+    note, or a vault that will not answer, is a no-op (returns 0), not an
+    error. A missing completed note is normal on the first run — it is
+    created the first time something has to move into it.
     """
-    path = vault_cfg.inbox_note
+    queue_path = vault_cfg.inbox_note
     try:
-        current = await vault.read_note(path)
+        current = await vault.read_note(queue_path)
     except VaultUnavailable as exc:
         log.warning("inbox.vault_unavailable", error=str(exc))
         return 0
     if current is None:
         return 0
 
-    out: list[str] = []
+    remaining: list[str] = []
+    finished: list[str] = []
     changed = 0
     for line in current.splitlines():
-        rewritten = _rewrite_line(db, line, acquisition_cfg, vault_cfg)
-        if rewritten != line:
-            changed += 1
-        out.append(rewritten)
+        done = _resolve_line(db, line, acquisition_cfg, vault_cfg)
+        if done is None:
+            remaining.append(line)
+            continue
+        changed += 1
+        finished.extend(done)
 
     if not changed:
         return 0
 
-    rebuilt = "\n".join(out)
+    rebuilt = "\n".join(remaining)
     if current.endswith("\n"):
         rebuilt += "\n"
-    await vault.project(path, rebuilt, mtime_ms=epoch_ms(), merge=False)
-    log.info("inbox.updated", path=path, lines_changed=changed)
+    await vault.project(queue_path, rebuilt, mtime_ms=epoch_ms(), merge=False)
+
+    completed_path = vault_cfg.completed_note
+    existing = (await vault.read_note(completed_path)) or ""
+    if existing and not existing.endswith("\n"):
+        existing += "\n"  # never append onto the same line as existing content
+    await vault.project(
+        completed_path, existing + "\n".join(finished) + "\n", mtime_ms=epoch_ms(), merge=False
+    )
+
+    log.info(
+        "inbox.updated", queue=queue_path, completed=completed_path, lines_changed=changed
+    )
     return changed
 
 
-def _rewrite_line(
+def _resolve_line(
     db: sqlite3.Connection,
     line: str,
     acquisition_cfg: AcquisitionConfig,
     vault_cfg: VaultConfig,
-) -> str:
+) -> list[str] | None:
+    """``None`` to leave ``line`` in the queue untouched; otherwise the line(s)
+    to append to the completed note in its place."""
     if _WIKILINK.search(line):
-        return line
+        # Already resolved — either this poll's own doing on an earlier line
+        # of a playlist, or one written before the queue/completed split
+        # existed. Either way it does not belong in the queue any more.
+        return [line]
+
     match = _URL.search(line)
     if match is None:
-        return line
+        return None  # human prose, a heading, a blank line — not ours to move
     url = match.group(0)
 
     try:
         results = enqueue(db, acquisition_cfg, url, origin="inbox")
     except Exception as exc:  # a bad URL or a yt-dlp break must not kill the poll
         log.warning("inbox.enqueue_failed", url=url, error=f"{type(exc).__name__}: {exc}")
-        return line
+        return None
 
     if not results:
-        return line
+        return None
 
     links = [_note_link(db, r.video_id) for r in results]
     if any(link is None for link in links):
         # At least one video in this line has no note yet — leave the line as
         # it is and try again next poll.
-        return line
+        return None
 
     prefix = _PREFIX.match(line)
     head = prefix.group(1) if prefix else ""
     if len(links) == 1:
-        return f"{head}{links[0]}"
+        return [f"{head}{links[0]}"]
     # A playlist URL expanded to several videos: one bullet per note.
     bullet = head if head.strip() else "- "
-    return "\n".join(f"{bullet}{link}" for link in links)
+    return [f"{bullet}{link}" for link in links]
 
 
 def _note_link(db: sqlite3.Connection, video_id: str) -> str | None:
