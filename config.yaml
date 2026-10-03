@@ -35,7 +35,12 @@ transcription:
   # The existing speaches container in ~/projects/asr-server, on the Mac.
   # Deployment topology — set via VIDEODIGEST_TRANSCRIPTION__REMOTE_URL.
   remote_url: "http://your-mac.example.local:8000"
-  model: distil-large-v3
+  # Must match what the worker has loaded (GET /v1/models on it). Deploys
+  # override this with ASR_MODEL from .deploy.env, which is required, so a
+  # mismatch cannot reach the NAS silently; this value is what a local run uses.
+  model: Systran/faster-whisper-small.en
+  # Not read by any code path today. Left in the schema for a future
+  # accuracy-tier retry; the worker does not have large-v3 installed.
   accuracy_model: large-v3
   vad_filter: true
   asr_poll_interval_minutes: 5
