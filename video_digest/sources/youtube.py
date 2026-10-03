@@ -10,10 +10,16 @@ network call in the test suite.
 
 from __future__ import annotations
 
+import contextlib
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 from urllib.parse import parse_qs, unquote, urlparse
+
+from ..logging_setup import get_logger
+
+log = get_logger(__name__)
 
 #: YouTube's own video id shape. Not a strict guarantee (ids are opaque, and
 #: yt-dlp is the real authority) — just tight enough to keep the regexes below
@@ -289,7 +295,6 @@ def fetch_subtitle_vtt(
     for days behind other work), so a stored URL would be stale by the time
     it is used.
     """
-    import httpx
     import yt_dlp
 
     ydl_opts: dict[str, Any] = {
@@ -322,9 +327,50 @@ def fetch_subtitle_vtt(
             "caption_track_missing", f"caption track for lang={lang!r} has no URL", video_id
         )
 
-    resp = httpx.get(url, timeout=timeout_s)
-    resp.raise_for_status()
-    return resp.text
+    return _get_with_retry(url, timeout_s=timeout_s)
+
+
+#: The timedtext CDN 429s under ordinary use — no API key, no account, just
+#: whatever rate it decides to enforce that minute — so a single failed GET
+#: must not read as "this video has no captions." Retried statuses are the
+#: transient ones (rate limit, momentary server trouble); anything else (403
+#: on an expired signed URL, 404) fails immediately since a retry of the same
+#: URL cannot fix it.
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+_RETRY_ATTEMPTS = 4
+_RETRY_BASE_DELAY_S = 2.0
+
+
+def _get_with_retry(url: str, *, timeout_s: float) -> str:
+    import httpx
+
+    last_exc: httpx.HTTPStatusError | None = None
+    for attempt in range(_RETRY_ATTEMPTS):
+        resp = httpx.get(url, timeout=timeout_s)
+        if resp.status_code not in _RETRY_STATUSES:
+            resp.raise_for_status()
+            return resp.text
+
+        last_exc = httpx.HTTPStatusError(
+            f"{resp.status_code} from timedtext CDN", request=resp.request, response=resp
+        )
+        if attempt == _RETRY_ATTEMPTS - 1:
+            break
+        retry_after = resp.headers.get("retry-after")
+        delay = _RETRY_BASE_DELAY_S * (2**attempt)
+        if retry_after is not None:
+            with contextlib.suppress(ValueError):
+                delay = max(delay, float(retry_after))
+        log.warning(
+            "transcript.caption_fetch_retry",
+            status=resp.status_code,
+            attempt=attempt + 1,
+            delay_s=delay,
+        )
+        time.sleep(delay)
+
+    assert last_exc is not None
+    raise last_exc
 
 
 def download_audio(video_id: str, dest_dir: str, *, cookies_file: str | None = None) -> str:

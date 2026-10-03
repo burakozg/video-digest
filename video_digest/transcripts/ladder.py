@@ -10,6 +10,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+import httpx
+
 from ..config import AcquisitionConfig
 from ..logging_setup import get_logger
 from ..sources.youtube import VideoMetadata, fetch_subtitle_vtt
@@ -131,16 +133,33 @@ def acquire(
         )
     )
 
+    def _fetch_or_needs_asr(video_id: str, lang: str, auto: bool) -> str:
+        # `fetch` (fetch_subtitle_vtt) already retries transient statuses —
+        # anything that still raises here survived that and is either a
+        # sustained block (YouTube's anti-bot page, observed to outlast any
+        # retry window that doesn't cost minutes) or a genuine fetch error.
+        # Either way, captions are not obtainable *this run*, which is
+        # exactly what NeedsASR means — T2 doesn't touch this endpoint at
+        # all, so it is a real fallback, not a second attempt at the same
+        # block.
+        try:
+            return fetch(video_id, lang, auto)
+        except httpx.HTTPError as exc:
+            log.warning(
+                "transcript.caption_fetch_failed", video_id=video_id, lang=lang, error=str(exc)
+            )
+            raise NeedsASR("caption_fetch_failed") from exc
+
     manual_lang = _pick_language(meta.manual_sub_langs, cfg.subtitle_languages)
     if manual_lang:
-        vtt = fetch(meta.video_id, manual_lang, False)
+        vtt = _fetch_or_needs_asr(meta.video_id, manual_lang, False)
         transcript = build_transcript(vtt, chapters=meta.chapters)
         log.info("transcript.acquired", video_id=meta.video_id, tier="T0", lang=manual_lang)
         return AcquiredTranscript(transcript=transcript, tier="T0")
 
     auto_lang = _pick_language(meta.auto_caption_langs, cfg.subtitle_languages)
     if auto_lang:
-        vtt = fetch(meta.video_id, auto_lang, True)
+        vtt = _fetch_or_needs_asr(meta.video_id, auto_lang, True)
         transcript = build_transcript(vtt, chapters=meta.chapters)
         trustworthy, reason = t1_is_trustworthy(
             requested_lang=auto_lang,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from video_digest.config import AcquisitionConfig
@@ -112,6 +113,52 @@ class TestNoUsableCaptions:
         with pytest.raises(NeedsASR) as exc:
             acquire(meta, cfg, _fetch=lambda *a: _GOOD_VTT)
         assert exc.value.reason == "machine_translated"
+
+
+class TestCaptionFetchFailureFallsBackToASR:
+    """A video kept permanently `stage_transcript = 'failed'` for a week
+    (2026-09-23) after YouTube's timedtext CDN 429'd once: `fetch_subtitle_vtt`
+    raising is not "this video has no captions", it is "captions are not
+    obtainable right now" — and T2 (remote ASR) doesn't touch this endpoint
+    at all, so it is a real fallback, not a second attempt at the same block.
+    """
+
+    def test_a_blocked_manual_track_needs_asr_rather_than_crashing(
+        self, cfg: AcquisitionConfig
+    ) -> None:
+        def fetch(video_id: str, lang: str, auto: bool) -> str:
+            raise httpx.HTTPStatusError(
+                "429 from timedtext CDN",
+                request=httpx.Request("GET", "https://example/timedtext"),
+                response=httpx.Response(429),
+            )
+
+        meta = _meta(manual_sub_langs=["en"])
+        with pytest.raises(NeedsASR) as exc:
+            acquire(meta, cfg, _fetch=fetch)
+        assert exc.value.reason == "caption_fetch_failed"
+
+    def test_a_blocked_auto_track_needs_asr_rather_than_crashing(
+        self, cfg: AcquisitionConfig
+    ) -> None:
+        def fetch(video_id: str, lang: str, auto: bool) -> str:
+            raise httpx.HTTPStatusError(
+                "429 from timedtext CDN",
+                request=httpx.Request("GET", "https://example/timedtext"),
+                response=httpx.Response(429),
+            )
+
+        meta = _meta(auto_caption_langs=["en"])
+        with pytest.raises(NeedsASR) as exc:
+            acquire(meta, cfg, _fetch=fetch)
+        assert exc.value.reason == "caption_fetch_failed"
+
+    def test_manual_subs_still_preferred_when_fetchable(self, cfg: AcquisitionConfig) -> None:
+        """The new try/except must not change the T0-over-T1 precedence for
+        the ordinary, successful path."""
+        meta = _meta(manual_sub_langs=["en"], auto_caption_langs=["en"])
+        result = acquire(meta, cfg, _fetch=lambda *a: _GOOD_VTT)
+        assert result.tier == "T0"
 
     def test_a_region_code_on_the_declared_language_is_not_a_mismatch(
         self, cfg: AcquisitionConfig

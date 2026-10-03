@@ -39,6 +39,10 @@ services:
       # topology, so environment-set rather than console-editable (there is no
       # console) or committed to config.yaml.
       VIDEODIGEST_TRANSCRIPTION__REMOTE_URL: ${ASR_REMOTE_URL:?set ASR_REMOTE_URL in .env}
+      # The model actually loaded on that worker — config.yaml's tracked
+      # default (distil-large-v3) is not necessarily what's installed there,
+      # and a mismatch 404s silently forever (see ASR_MODEL in .deploy.env).
+      VIDEODIGEST_TRANSCRIPTION__MODEL: ${ASR_MODEL:?set ASR_MODEL in .env}
       VIDEODIGEST_OPENROUTER_API_KEY: ${VIDEODIGEST_OPENROUTER_API_KEY:-}
       VIDEODIGEST_NTFY_TOKEN: ${VIDEODIGEST_NTFY_TOKEN:-}
       TZ: ${TZ:-Europe/Stockholm}
